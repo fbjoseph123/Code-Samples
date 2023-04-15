@@ -1,0 +1,112 @@
+clear
+cd "C:\Users\frank\OneDrive\Desktop\Applied Longitudinal Data Analysis"
+infile id imps79 week treatment sex using SCHIZREP.DAT.txt, clear
+drop if mi(imps79)
+summarize 
+format imps79 %6.2f
+tabulate week, summarize(imps79) wrap 
+xtline imps79, addplot(scatter imps79 week, msymbol(0h) msize(vsmall) legend(off)) t(week) i(id) overlay
+graph box imps79, over(week) b1title("week")
+reshape wide imps79, i(id) j(week)
+pwcorr imps790 imps791 imps792 imps793 imps794 imps795 imps796
+graph matrix imps790 imps791 imps792 imps793 imps794 imps795 imps796
+reshape long imps79, i(id) j(week)
+twoway histogram imps79 if week==0, width(1) name(week0)
+twoway histogram imps79 if week==1, width (1) name(week1)
+twoway histogram imps79 if week==2, width (1) name(week2)
+twoway histogram imps79 if week==3, width (1) name(week3)
+twoway histogram imps79 if week==4, width (1) name(week4)
+twoway histogram imps79 if week==5, width (1) name(week5)
+twoway histogram imps79 if week==6, width (1) name(week6)
+graph combine week0 week1 week2 week3 week4 week5 week6
+mixed imps79 week || id:
+estat ic
+estimates store m1
+mixed imps79 week || id:week, covariance(unstructured) mle
+estat ic
+estimates store m2
+lrtest m1 m2
+display chi2tail(1, 151.2486)
+display chi2tail(2, 151.2486)
+display .5*chi2tail(1, 151.2486) + .5*chi2tail(2, 151.2486)
+generate week2 = week*week
+mixed imps79 week week2 || id: week, covariance(unstructured) mle
+estimates store m3
+estat ic
+lrtest m2 m3
+display chi2tail(2, 56.5066)
+display chi2tail(3, 56.5066)
+display .5*chi2tail(2, 56.5066) + .5*chi2tail(3, 56.5066)
+mixed imps79 week week2 || id: week week2, covariance(unstructured) mle
+estat ic
+estimates store m4
+lrtest m3 m4
+display chi2tail(2, 117.9408)
+display chi2tail(3, 117.9408)
+display .5*chi2tail(2, 117.9408) + .5*chi2tail(3, 117.9408)
+
+gen trmt_week = treatment * week
+gen trmt_week2 = treatment * week2
+mixed imps79 week week2 treatment trmt_week trmt_week2 || id: week week2, covariance(unstructured) mle
+estat ic
+mata
+beta = (5.288397 \ -0.2087056 \ 0.0109578 \ -0.0186494 \ -0.4982512 \0.0435435)
+xmat_placebo = (1,0,0,0,0,0\
+1,1,1,0,0,0\
+1,2,2,0,0,0\
+1,3,3,0,0,0\
+1,4,4,0,0,0\
+1,5,5,0,0,0\
+1,6,6,0,0,0)
+xmat_treatment = (1,0,0,1,0,0\
+1,1,1,1,1,1\
+1,2,2,1,2,2\
+1,3,3,1,3,3\
+1,4,4,1,4,4\
+1,5,5,1,5,5\
+1,6,6,1,6,6)
+xbeta_placebo = xmat_placebo * beta 
+xbeta_treatment = xmat_treatment * beta
+xbeta_placebo, xbeta_treatment
+end
+egen treatment_w0 = mean(imps79 / (week == 0 & treatment == 1))
+display treatment_w0
+egen placebo_w0 = mean(imps79 / (week == 0 & treatment == 0))
+display placebo_w0
+
+egen treatment_w1 = mean(imps79 / (week == 1 & treatment == 1))
+display treatment_w1
+egen placebo_w1 = mean(imps79 / (week == 1 & treatment == 0))
+display placebo_w1
+
+egen treatment_w2 = mean(imps79 / (week == 2 & treatment == 1))
+display treatment_w2
+egen placebo_w2 = mean(imps79 / (week == 2 & treatment == 0))
+display placebo_w2
+
+egen treatment_w3 = mean(imps79 / (week == 3 & treatment == 1))
+display treatment_w3
+egen placebo_w3 = mean(imps79 / (week == 3 & treatment == 0))
+display placebo_w3
+
+egen treatment_w4 = mean(imps79 / (week == 4 & treatment == 1))
+display treatment_w4
+egen placebo_w4 = mean(imps79 / (week == 4 & treatment == 0))
+display placebo_w4
+
+egen treatment_w5 = mean(imps79 / (week == 5 & treatment == 1))
+display treatment_w5
+egen placebo_w5 = mean(imps79 / (week == 5 & treatment == 0))
+display placebo_w5
+
+egen treatment_w6 = mean(imps79 / (week == 6 & treatment == 1))
+display treatment_w6
+egen placebo_w6 = mean(imps79 / (week == 6 & treatment == 0))
+display placebo_w6
+
+*https://www.stata.com/manuals/memixed.pdf
+*https://www.stata.com/manuals/me.pdf
+*https://stats.oarc.ucla.edu/stata/faq/how-can-i-perform-the-likelihood-ratio-wald-and-lagrange-multiplier-score-test-in-stata/
+*https://www.stata.com/statalist/archive/2009-06/msg00884.html
+*https://stats.oarc.ucla.edu/stata/faq/how-do-i-copy-stata-output-and-stata-graphs-into-word/#:~:text=Highlight%20the%20output%20you%20want,menu%20choose%20Edit%20then%20Paste.
+*https://stats.oarc.ucla.edu/stata/output/regression-analysis/#:~:text=The%20last%20variable%20(_cons)%20represents,all%20other%20variables%20are%200.
