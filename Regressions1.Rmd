@@ -1,0 +1,271 @@
+---
+title: "Regressions1"
+output: pdf_document
+date: "2023-02-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lme4)
+library(merTools)
+library(glmmTMB) 
+library(bbmle) 
+library(ggthemes)
+library(showtext)
+library(ggplot2)
+library(lattice)
+library(sjPlot)
+library(brms)
+library(performance)
+library(zoo)
+library(GGally)
+library(fastDummies)
+setwd("C:/Users/frank/OneDrive/Desktop/Policy Lab")
+industry_data <- read.csv("industries_ccap_naics3_clean_with_demographics.csv")
+```
+
+```{r}
+#Following code is setting up the data for analysis
+
+# Following code turns quarters and years into a linear term
+industry_data$year_quarter <- paste(industry_data$year, industry_data$quarter, sep = "q")
+industry_data$quarter_space <- as.yearqtr(industry_data$year_quarter,format="%Yq%q")
+industry_data$date = as.Date(industry_data$quarter_space)
+
+# Turn quarters and NAICS codes into dummy variable to assess seasonality 
+industry_data <- dummy_cols(industry_data, select_columns = "quarter")
+industry_data <- dummy_cols(industry_data, select_columns = "naics3")
+
+# Creating a rate as the outcome variable for logistic regression 
+industry_data$ccap_share = industry_data$ccap_participants_count/industry_data$ccap_eligible_count
+
+# Created rates by level of education 
+industry_data$hs_or_less <- (industry_data$less_than_high_school + industry_data$high_school_or_equivalent_no_college) / industry_data$all
+industry_data$at_least_some_college <- (industry_data$some_college_or_associate_degree + industry_data$bachelor.s_degree_or_advanced_degree) / industry_data$all
+
+industry_data$less_than_high_school/industry_data$all
+industry_data$hs <- industry_data$high_school_or_equivalent_no_college/industry_data$all
+industry_data$some_college <- industry_data$some_college_or_associate_degree/industry_data$all 
+industry_data$college_degree <- industry_data$bachelor.s_degree_or_advanced_degree/industry_data$all 
+
+
+#https://www.princeton.edu/~otorres/TimeSeriesR101.pdf
+```
+
+
+
+```{r}
+# Data exploration and visualization
+ggplot(industry_data,aes(x=date,y=ccap_share,color=factor(naics3)))+geom_point()+geom_line()+geom_smooth(color="Black")
+
+ggpairs(industry_data, columns=c("med_wages_all","iqr_wages_all","share_tenure_0to2q_all","share_tenure_3to4q_all","share_tenure_1to2y_all","share_tenure_3plusy_all","african_american_share","native_american_share","latino_share","hs_or_less","at_least_some_college","p50_tenure_qtr_all","jobs_per_worker_all","share_primary_job_all","mean_employer_size_all","employer_count_all","share_stable_jobs_all","person_count_pri_job_all"))
+
+#Visually examining relationship between job stability and CCAP uptake 
+ggplot(industry_data,aes(x=share_stable_jobs_all,y=ccap_share, color=factor(naics3)))+ geom_line() + geom_point()+geom_smooth(color="Black")
+# Seems to be as the share of stable jobs increases then CCAP share decreases
+ggplot(industry_data,aes(x=share_stable_jobs_all,y=person_count_ccap, color=factor(naics3)))+geom_point()+geom_line()+geom_smooth(color="Black")
+# Seems to be as the share of stable jobs increases then CCAP person count decreases
+
+#Examining the distribution of both CCAP participants and the rate
+hist(industry_data$ccap_participants_count)
+hist(industry_data$ccap_share)
+sum(industry_data$ccap_participants_count == 0)
+nrow(industry_data)
+
+industry_data %>% summarize(mean = mean(is.na(ccap_participants_count)))
+
+industry_data %>% summarize(mean = mean(is.na(ccap_share)))
+
+industry_data %>% ggplot(aes(x=ccap_share)) + geom_histogram()
+    
+#Examining the distribution of stable jobs and the rates
+hist(industry_data$share_stable_jobs_all)
+hist(industry_data$stable_job_count_all)
+hist(industry_data$ccap_adjusted_share)
+```
+
+
+```{r}
+# These are poisson regressions with the offset being used for the denominator of the rates of the dependent variable
+poisson <- glmmTMB(person_count_ccap ~ offset(log(person_count_all)) + (1|naics3) + date + quarter_1 + quarter_2 + quarter_3 + quarter_4 + as.factor(quarter)*naics3 + med_wages_all + iqr_wages_all + share_tenure_0to2q_all + share_tenure_3to4q_all + jobs_per_worker_all + share_primary_job_all + mean_employer_size_all + employer_count_all + share_stable_jobs_all + person_count_pri_job_all, data=industry_data, family="poisson")
+
+tab_model(poisson)
+summary(poisson)
+BIC(poisson)
+check_overdispersion(poisson)
+# Convergence error and severely overdispersed. Might not continue to use going forward due to the nature of poisson distributions.  
+
+```
+
+```{r}
+#Negative binomial regression 
+nbinomial_regression2 <- glmmTMB(person_count_ccap ~ offset(log(person_count_all)) + (1|naics3) + date + quarter_1 + quarter_2 + quarter_3 + quarter_4 + as.factor(quarter)*naics3 + med_wages_all + iqr_wages_all + share_tenure_0to2q_all + share_tenure_3to4q_all + jobs_per_worker_all + share_primary_job_all + mean_employer_size_all + employer_count_all + share_stable_jobs_all + person_count_pri_job_all, data=industry_data, family="nbinom2")
+summary(nbinomial_regression2)
+# Severe convergence errors 
+
+simple_nbinomial <- glmmTMB(person_count_ccap ~ offset(log(person_count_all)) + (1|naics3) + date + med_wages_all + share_stable_jobs_all + p50_tenure_qtr_all + share_tenure_0to2q_all + share_tenure_3to4q_all + share_tenure_1to2y_all + share_tenure_3plusy_all + jobs_per_worker_all + quarter_4 + quarter_3 + quarter_2 + mean_employer_size_all + employer_count_all, data=industry_data, family="nbinom2")
+summary(simple_nbinomial)
+tab_model(simple_nbinomial)
+industry_data$share_tenure_3plusy_all
+
+female_count <- glmmTMB(person_count_ccap ~ offset(log(female_count)) + (1|naics3) + date + med_wages_all + share_stable_jobs_all + p50_tenure_qtr_all + share_tenure_0to2q_all + share_tenure_3to4q_all + share_tenure_1to2y_all + share_tenure_3plusy_all + jobs_per_worker_all + quarter_4 + quarter_3 + quarter_2 + mean_employer_size_all + employer_count_all, data=industry_data, family="nbinom2")
+summary(female_count)
+
+control_female_count <- glmmTMB(person_count_ccap ~ offset(log(person_count_all)) + (1|naics3) + date + med_wages_all + share_stable_jobs_all + p50_tenure_qtr_all + share_tenure_0to2q_all + share_tenure_3to4q_all + share_tenure_1to2y_all + share_tenure_3plusy_all + jobs_per_worker_all + quarter_4 + quarter_3 + quarter_2 + mean_employer_size_all + employer_count_all + female_count, data=industry_data, family="nbinom2")
+summary(control_female_count)
+
+race_gender_ed_controls <- glmmTMB(
+  person_count_ccap ~ 
+    offset(log(person_count_all)) + 
+    (1|naics3) + 
+    date + 
+    med_wages_all + 
+    share_stable_jobs_all + 
+    p50_tenure_qtr_all + 
+    share_tenure_3to4q_all + 
+    share_tenure_1to2y_all + 
+    jobs_per_worker_all + 
+    quarter_4 + 
+    quarter_3 + 
+    quarter_2 + 
+    mean_employer_size_all + 
+    employer_count_all + 
+    african_american_share + 
+    native_american_share + 
+    female_share + 
+    latino_share + 
+    hs_or_less + 
+    at_least_some_college, 
+  data=industry_data, family="nbinom2")
+summary(race_gender_ed_controls)
+tab_model(race_gender_ed_controls)
+
+ccap_gap_regression <- glmmTMB(
+  ccap_gap_count_alternative ~ 
+    offset(log(person_count_all)) + 
+    (1|naics3) + 
+    date + 
+    med_wages_all + 
+    share_stable_jobs_all + 
+    p50_tenure_qtr_all + 
+    share_tenure_3to4q_all + 
+    share_tenure_1to2y_all + 
+    jobs_per_worker_all + 
+    quarter_4 + 
+    quarter_3 + 
+    quarter_2 + 
+    mean_employer_size_all + 
+    employer_count_all + 
+    african_american_share + 
+    native_american_share + 
+    latino_share + 
+    hs_or_less + 
+    at_least_some_college, 
+  data=industry_data, family="nbinom2")
+summary(ccap_gap_regression)
+
+ccap_simple_gap <- glmmTMB(
+  ccap_gap_count_alternative ~ 
+    offset(log(person_count_all)) + 
+    (1|naics3) + 
+    share_stable_jobs_all,
+  data=industry_data, family="nbinom2")
+summary(ccap_simple_gap)
+
+ccap_linear_regression <- lm(log(ccap_gap_count_alternative) ~  as.factor(naics3) + log(person_count_all) + date + 
+    med_wages_all + 
+    share_stable_jobs_all + 
+    p50_tenure_qtr_all + 
+    share_tenure_3to4q_all + 
+    share_tenure_1to2y_all + 
+    jobs_per_worker_all + 
+    quarter_4 + 
+    quarter_3 + 
+    quarter_2 + 
+    mean_employer_size_all + 
+    employer_count_all + 
+    african_american_share + 
+    native_american_share + 
+    latino_share + 
+    hs_or_less + 
+    at_least_some_college, data=industry_data)
+summary(ccap_linear_regression)
+
+ccap_rate_linear <- lm(ccap_gap_share_alternative ~ as.factor(naics3) + date + 
+    med_wages_all + 
+    share_stable_jobs_all + 
+    p50_tenure_qtr_all + 
+    share_tenure_3to4q_all + 
+    share_tenure_1to2y_all + 
+    jobs_per_worker_all + 
+    quarter_4 + 
+    quarter_3 + 
+    quarter_2 + 
+    mean_employer_size_all + 
+    employer_count_all + 
+    african_american_share + 
+    native_american_share + 
+    latino_share + 
+    hs_or_less + 
+    at_least_some_college, data=industry_data)
+summary(ccap_rate_linear)
+
+
+summary(industry_data$ccap_gap_count_alternative)
+hist(industry_data$p50_tenure_qtr_all)
+  
+family1_nbinom <- glmmTMB(person_count_ccap ~ offset(log(person_count_all)) + (1|naics3) + date + med_wages_all + share_stable_jobs_all + p50_tenure_qtr_all + share_tenure_0to2q_all + share_tenure_3to4q_all + jobs_per_worker_all + quarter_4 + quarter_3 + quarter_2 + mean_employer_size_all + employer_count_all, data=industry_data, family="nbinom1")
+summary(family1_nbinom)
+tab_model(family1_nbinom)
+
+errors_standardized = residuals(simple_nbinomial) / simple_nbinomial$frame$person_count_ccap
+
+industry_data %>% summarize(mean = sum(!is.na(ccap_participants_count)))
+
+# Surprisingly increasing job stability decreases CCAP count. However, we cannot do the NAICS3 by quarter interaction. Also we can re-run this with more controls. 
+
+
+```
+
+
+
+```{r}
+# Logistic regression 
+stability_logistic <- glmer(ccap_share ~ (1|naics3) + date + quarter_1 + quarter_2 + quarter_3 + quarter_4 + as.factor(quarter)*naics3 + med_wages_all + iqr_wages_all + share_tenure_0to2q_all + share_tenure_3to4q_all + jobs_per_worker_all + share_primary_job_all + mean_employer_size_all + employer_count_all + share_stable_jobs_all + person_count_pri_job_all, data=industry_data, family=binomial)
+
+summary(stability_logistic)
+tab_model(stability_logistic)
+BIC(stability_logistic)
+
+simple_logistic_full_interactions <- glmer(ccap_share ~ (1|naics3) + date + med_wages_all + share_stable_jobs_all + jobs_per_worker_all + as.factor(naics3) + as.factor(quarter) + as.factor(naics3)*as.factor(quarter), data=industry_data, family=binomial)
+summary(simple_logistic_full_interactions)
+tab_model(simple_logistic_full_interactions)
+# R is still really struggling with the naics by season interaction. I just couldn't keep waiting for it to finish running. 
+
+logistic_simplified <- glmer(ccap_share ~ (1|naics3) + date + med_wages_all + share_stable_jobs_all + jobs_per_worker_all, data=industry_data, family=binomial)
+summary(logistic_simplified)
+tab_model(logistic_simplified)
+# Smaller effect of stable jobs but still very large when exponentiated. In addition med_wages_all and jobs_per_worker_all look significant but this might be because the other variables are controls.   
+
+logistic_without_rate <- glmer(ccap_share ~ (1|naics3) + date + med_wages_all + stable_job_count_all + person_count_all + jobs_per_worker_all, data=industry_data, family=binomial)
+summary(logistic_without_rate)
+tab_model(logistic_without_rate)
+```
+
+```{r}
+#OLS regressions
+
+full_ols_with_rate <- lmer(ccap_share ~ (1|naics3) + date + quarter_1 + quarter_2 + quarter_3 + quarter_4 + as.factor(quarter)*naics3 + med_wages_all + iqr_wages_all + share_tenure_0to2q_all + share_tenure_3to4q_all + jobs_per_worker_all + share_primary_job_all + mean_employer_size_all + employer_count_all + share_stable_jobs_all + person_count_pri_job_all, data=industry_data)
+summary(full_ols_with_rate)
+tab_model(full_ols_with_rate)
+# Share stable jobs is not significant 
+
+
+
+```
+
+
+```
+
+
