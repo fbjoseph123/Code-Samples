@@ -1,0 +1,174 @@
+---
+title: "AMA Final Project"
+output: pdf_document
+date: "2023-05-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("C:/Users/frank/OneDrive/Desktop/Applied Multivariate Analysis for Social Scientists/hospice_care_current_data")
+library(tidyverse)
+library(tidycensus)
+library(dplyr)
+library (maps)
+library(mapproj)
+library(ggplot2)
+library(reshape2)
+library(tidyr)
+library(readxl)
+library(cluster)
+library(factoextra)
+library(rmpw)
+library(forcats)
+library(mediation)
+library(Hmisc)
+library(NbClust)
+library(vctrs)
+library(eeptools)
+library(mma)
+library(janitor)
+census_api_key("b60e46e2a441c7d1100174164054b096ffdd8b41")
+readRenviron("~/.Renviron")
+
+general_info <- read.csv("Hospice_General-Information_Feb2023.csv")
+# The general info file includes information on CMS certification number, facility name, address line 1, address line 2, city, state, zip code, county name, phone number, CMS region, ownership status, and certification date.
+hospice_national <- read.csv("Hospice_National_Feb2023.csv")
+# Includes certification number, measure code, measure name, score, footnote, and measure date range. The CCN reads as "Nation" and thus this is just an overall score for the entire country. It might be the average score which might be helpful to reference back to. 
+hospice_provider <- read.csv("Hospice_Provider_Feb2023.csv")
+# CMS certification number, facility name (repeated for each facility), address line 1, address line 2, city, state, zip code, county name, phone number, CMS region, measure code, measure name, score, footnote, measure date range
+hospice_state <- read.csv("Hospice_State_Feb2023.csv")
+# State, measure code, measure name, score, footnote, measure date range
+hospice_zip <- read.csv("Hospice_Zip_Feb2023.csv")
+# State, CMS certification number, zip code
+national_survey <- read.csv("National_CAHPS_Hospice_Survey_Data_Feb2023.csv")
+# Measure code, measure name, score, footnote, date
+provider_survey <- read.csv("Provider_CAHPS_Hospice_Survey_Data_Feb2023.csv")
+# certification number, facility name, address line 1, address line 2, city, state, zip code, county name, phone number, CMS region, measure code, measure name, score, star rating, footnote, date 
+state_survey <- read.csv("State_CAHPS_Hospice_Survey_Data_Feb2023.csv")
+# state, measure code, measure name, score, footnote, date
+pac_puf <- read.csv("PACPUF_Provider_Table_2020.csv")
+# This includes the PAC PUF data for hospices 
+median_income <- get_acs(geography="zcta",variables="S1901_C01_012E",year=2021)
+# Median income by ZCTA from Census data
+
+wide_provider_measures <- dcast(hospice_provider, Facility.Name + Phone.Number + CMS.Certification.Number..CCN. + Zip.Code + Address.Line.1 + Address.Line.2 + City + State + County.Name + CMS.Region ~ Measure.Name + Measure.Code, value.var="Score")
+
+wide_survey <- dcast(provider_survey, CMS.Certification.Number..CCN. + Facility.Name + Address.Line.1 + Address.Line.2 + City + State + Zip.Code + County.Name + Phone.Number + CMS.Region ~ Measure.Name + Measure.Code, value.var="Score")
+
+hospice_merge <- merge(wide_provider_measures, wide_survey, by=c("CMS.Certification.Number..CCN.","Phone.Number","Zip.Code","Address.Line.1","Address.Line.2","City","State","County.Name","CMS.Region","Facility.Name"))
+
+hospice_pac <- pac_puf[pac_puf$SRVC_CTGRY == "HOS",]
+hospice_pac <- hospice_pac %>% rename("CMS.Certification.Number..CCN." = "PRVDR_ID")
+
+final_merge <- merge(hospice_merge, hospice_pac, by="CMS.Certification.Number..CCN.")
+final_merge <- final_merge[,!names(final_merge) %in% c("YEAR","YEAR_TYPE","SMRY_C TGRY","SRVC_CTGRY","PRVDR_CITY","STATE","PRVDR_ZIP","PRVDR_NAME","Phone.Number","Summary Category","Family caregiver survey rating_SUMMARY_STAR_RATING","Address.Line.1","_EMO_REL_MBV")]
+
+puc_dict <- read_xlsx("key.xlsx")
+puc_dict <- puc_dict[,!names(puc_dict) %in% c("VARIABLE ORDER","HH","HOSPICE","SNF","IRF","LTCH","DESCRIPTION","Hospice")]    
+colnames(final_merge) <- dplyr::recode(colnames(final_merge),!!!setNames(as.character(puc_dict$"VARIABLE LABEL"), puc_dict$"VARIABLE NAME"))
+
+final_merge <- final_merge[, colSums(is.na(final_merge)) != nrow(final_merge)]
+
+provider_status <- subset(general_info, select=c("CMS.Certification.Number..CCN.","Ownership.Type"))
+final_merge <- merge(provider_status, final_merge, by="CMS.Certification.Number..CCN.")
+median_data <- subset(median_income, select=c("GEOID","estimate"))
+median_data <- median_data %>% rename("Zip.Code" = "GEOID")
+final_merge <- merge(final_merge, median_data, by="Zip.Code")
+final_merge <- final_merge %>% rename("median_income" = "estimate")
+
+colnames(final_merge) <- gsub(" ","_",colnames(final_merge))
+final_merge <- final_merge[,!grepl("DENOMINATOR",colnames(final_merge))]
+final_merge <- final_merge[,!grepl("PERCENTILE",colnames(final_merge))]
+colnames(final_merge) <- gsub(",","",colnames(final_merge))
+colnames(final_merge) <- gsub("/","",colnames(final_merge))
+colnames(final_merge) <- gsub("$","",colnames(final_merge))
+colnames(final_merge) <- gsub("%","",colnames(final_merge))
+colnames(final_merge) <- gsub("[()]","",colnames(final_merge))
+colnames(final_merge) <- gsub("&","",colnames(final_merge))
+final_merge[final_merge == "Not Available"] <- NA
+
+# https://stackoverflow.com/questions/59314285/selectively-rename-r-data-frame-column-names-using-a-key-value-pair-dictionary 
+# https://cran.r-project.org/web/packages/data.table/vignettes/datatable-reshape.html
+```
+
+PCA using correlation matrix 
+```{r}
+full_numbers <- final_merge
+full_numbers[full_numbers == "*"] <- NA
+full_numbers <- full_numbers[c(-1,-2,-4,-5,-6,-7,-8)]
+full_numbers$Ownership.Type <- fct_recode(full_numbers$Ownership.Type, "1" = "For-Profit", "0" = "Government", "0" = "Other", "0" = "Non-Profit", "0" = "Combination Government & Non-Profit")
+full_numbers <- full_numbers %>% mutate_at(1:122, as.numeric)
+full_numbers <- remove_constant(full_numbers, na.rm = TRUE, quiet = FALSE)
+cor_matrix <- cor(full_numbers, use="pairwise.complete.obs")
+outcome_cor_matrix <- cor_matrix[,"NO_they_would_probably_not_or_definitely_not_recommend_the_hospice_RECOMMEND_BBV"]
+sort(outcome_cor_matrix)
+pca_result <- prcomp(cor_matrix, scale. = FALSE)
+pcs <- pca_result$x
+variances <- pca_result$sdev^2
+prop_var <- variances / sum(variances)
+summary(pca_result)
+var_explained = pca_result$sdev^2 / sum(pca_result$sdev^2)
+
+```
+
+
+```{r}
+selected_variables <- final_merge[,c("Gaps_in_nursing_visits__elections_H_012_02_OBSERVED","Percent_White_Beneficiaries","Percent_Medicare_Beneficiaries_in_a_Rural_ZIP","Percentage_with_a_Death_Discharge_Status","Hospice_Visits_in_the_Last_Days_of_Life_H_011_01_OBSERVED","Percent_of_Patients_with_Cancer_Pct_Pts_w_Cancer","Episode_or_Stay_Count","Distinct_Beneficiaries","Percent_of_Beneficiaries_with_60_or_more_Service_Days","Ownership.Type","NO_they_would_probably_not_or_definitely_not_recommend_the_hospice_RECOMMEND_BBV","Percentage_of_Days_in_Hospice_RHC","median_income")] 
+selected_variables[selected_variables == "*"] <- NA
+selected_variables <- na.omit(selected_variables)
+selected_variables$Ownership.Type <- fct_recode(selected_variables$Ownership.Type, "2"="For-Profit","1"="Other","1"="Non-Profit","1"="Government","1"="Combination Government & Non-Profit")
+selected_variables <- selected_variables %>% mutate_at(1:13, as.numeric)
+```
+
+```{r}
+cor_matrix <- cor(selected_variables, use="pairwise.complete.obs")
+cor_matrix[,"NO_they_would_probably_not_or_definitely_not_recommend_the_hospice_RECOMMEND_BBV"]
+  
+AMA_data <- selected_variables
+rownames(AMA_data) = seq(length=nrow(AMA_data))
+AMA_data <- AMA_data[-451,]
+scaled_data <- scale(AMA_data)
+
+ag.clust <- agnes(AMA_data, stand=TRUE, method="ward")
+plot(ag.clust)
+rect.hclust(ag.clust,k=10, border="red")
+fviz_nbclust(scaled_data, pam, method="silhouette")
+fviz_nbclust(scaled_data, pam, method="wss")
+#fviz_nbclust(scaled_data, pam, method="gap")
+# Bootstrapping for the gap statistic takes too long so it will not be used
+pam_final <- pam(scaled_data, 3, metric="euclidean", stand=TRUE)
+summary(pam_final)
+
+fviz_cluster(pam_final, data=AMA_data, ellipse.type="euclid", star.plot=TRUE, repel=TRUE, ggtheme=theme_minimal())
+table1 <- aggregate(AMA_data, by=list(cluster=pam_final$cluster),mean)
+write.csv(table1,"C:\\Users\\frank\\OneDrive\\Desktop\\table1.csv",row.names=FALSE)
+AMA_data$cluster <- pam_final$cluster
+forprofit_data <- AMA_data[AMA_data$Ownership.Type == "2",]
+hist(forprofit_data$cluster)
+table2 <- aggregate(forprofit_data, list(forprofit_data$cluster),mean)
+write.csv(table2,"C:\\Users\\frank\\OneDrive\\Desktop\\table2.csv",row.names=FALSE)
+nonprofit_data <- AMA_data[AMA_data$Ownership.Type == "1",]
+hist(nonprofit_data$cluster)
+table3 <- aggregate(nonprofit_data, list(nonprofit_data$cluster),mean)
+write.csv(table3,"C:\\Users\\frank\\OneDrive\\Desktop\\table3.csv",row.names=FALSE)
+
+#Kmeans
+fviz_nbclust(scaled_data, kmeans, method="silhouette")
+fviz_nbclust(scaled_data, kmeans, method="wss")
+kmeans_final <- kmeans(scaled_data, 6, nstart = 25)
+print(kmeans_final)
+kmeans_final$clus
+pam_final$clusinfo
+# Take the average dissimilarity multiply by size and sum them = WSS
+# For TSS = 
+# Compute Euclidean distances from each point to the overall mean of the data
+#distances_to_mean <- dist(rbind(iris_numeric, colMeans(iris_numeric)))
+# Extract distances from each point to the overall mean (the last column of the distance matrix)
+#distances_to_mean <- as.matrix(distances_to_mean)[1:(nrow(iris_numeric)-1), nrow(iris_numeric)]
+# Compute the total sum of squares (TSS)
+#tss = sum(distances_to_mean^2)
+distances_to_mean <- dist(rbind(scaled_data, colMeans(scaled_data)))
+distances_to_mean <- as.matrix(distances_to_mean)[1:(nrow(scaled_data)-1), nrow(scaled_data)]
+tss = sum(distances_to_mean^2)
+```
+
